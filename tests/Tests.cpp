@@ -1,4 +1,5 @@
 // AI module tests: utility curves and scores, brain switching, sight cone and line of sight, hearing, memory, nav route following.
+#include "ai/sim/Patrol.h"
 #include "ai/sim/Perception.h"
 #include "ai/sim/Route.h"
 #include "ai/sim/Utility.h"
@@ -227,6 +228,58 @@ void testRoute() {
     CHECK(r2.count == r3.count && r2.points[0].x == r3.points[0].x && r2.points[0].z == r3.points[0].z);
 }
 
+
+// A straight 10 m path along x (millimeter distances), standing in for scene::ScenePath
+struct TestPath {
+    bool closed = false;
+    u32 length = 10000;
+    bool valid() const { return true; }
+};
+Vec3 pathPoint(const TestPath& p, u32 mm) { return {static_cast<f32>(mm < p.length ? mm : p.length) / 1000.0f, 0.0f, 0.0f}; }
+u32 pathClosest(const TestPath&, Vec3 at) { return static_cast<u32>(at.x * 1000.0f); }
+
+void testPatrol() {
+    TestPath open;
+    Patrol p;
+    PatrolParams params;
+    params.stepMm = 4000;
+    params.reach = 0.5f;
+    Vec3 feet{2.0f, 0.0f, 1.0f};
+    Vec3 goal = patrolTarget(p, open, feet, params); // starts at the closest point (2 m) and, being there in x but 1 m off in z, keeps it
+    CHECK(p.started && p.distance == 2000 && goal.x == 2.0f);
+    feet = {2.0f, 0.0f, 0.0f};
+    goal = patrolTarget(p, open, feet, params); // reached: the carrot moves on by 4 m
+    CHECK(p.distance == 6000 && goal.x == 6.0f);
+    feet = {6.0f, 0.0f, 0.0f};
+    patrolTarget(p, open, feet, params); // 10 m: the end, turns around
+    CHECK(p.distance == 10000 && p.backward);
+    feet = {10.0f, 0.0f, 0.0f};
+    goal = patrolTarget(p, open, feet, params);
+    CHECK(p.distance == 6000 && p.backward && goal.x == 6.0f);
+    p.distance = 3000;
+    patrolTarget(p, open, {3.0f, 0.0f, 0.0f}, params);
+    CHECK(p.distance == 0 && !p.backward); // within a step of the start: stops at it and turns around...
+    patrolTarget(p, open, {0.0f, 0.0f, 0.0f}, params);
+    CHECK(p.distance == 4000 && !p.backward); // ...then walks forward again
+
+    TestPath loop;
+    loop.closed = true;
+    Patrol q;
+    q.started = true;
+    q.distance = 8000;
+    patrolTarget(q, loop, {8.0f, 0.0f, 0.0f}, params);
+    CHECK(q.distance == 2000); // wraps around
+
+    // Same input, same carrot
+    Patrol a, b;
+    for (int i = 0; i < 20; ++i) {
+        const Vec3 at = pathPoint(open, a.distance);
+        patrolTarget(a, open, at, params);
+        patrolTarget(b, open, pathPoint(open, b.distance), params);
+    }
+    CHECK(a.distance == b.distance && a.backward == b.backward);
+}
+
 } // namespace
 
 int main() {
@@ -236,6 +289,7 @@ int main() {
     testCone();
     testSightAndHearing();
     testRoute();
+    testPatrol();
     if (g_failed == 0) std::printf("ai_tests: all passed\n");
     return g_failed == 0 ? 0 : 1;
 }
